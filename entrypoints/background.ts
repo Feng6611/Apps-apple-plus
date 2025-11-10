@@ -1,11 +1,23 @@
-import type { ExtensionSettings, PanelWindowMode } from '@/src/lib/storage';
-import { DEFAULT_SETTINGS, ensureDefaultSettings, getSettings, subscribeToSettings } from '@/src/lib/storage';
+import { ensureDefaultSettings } from '@/src/lib/storage';
+
+const SIDEPANEL_PAGE = 'sidepanel.html';
 
 export default defineBackground(() => {
-  let currentWindowMode: PanelWindowMode = DEFAULT_SETTINGS.windowMode;
-  let popupWindowId: number | null = null;
-
   const sidePanelAvailable = Boolean(chrome.sidePanel?.setOptions);
+
+  const configureSidePanel = () => {
+    if (!sidePanelAvailable) {
+      console.warn('Side panel API is not available in this browser.');
+      return;
+    }
+    chrome.sidePanel!.setOptions({ path: SIDEPANEL_PAGE, enabled: true }, () => {
+      const err = chrome.runtime?.lastError;
+      if (err) {
+        console.warn('Failed to configure side panel', err);
+      }
+    });
+    chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true });
+  };
 
   const initialize = async () => {
     try {
@@ -14,93 +26,25 @@ export default defineBackground(() => {
       console.error('Failed to initialize default settings', error);
     }
 
-    if (sidePanelAvailable) {
-      chrome.sidePanel!.setOptions({ path: 'sidepanel/index.html', enabled: true }, () => {
-        const err = chrome.runtime?.lastError;
-        if (err) {
-          console.warn('Failed to configure side panel', err);
-        }
-      });
-    }
-
-    try {
-      const settings = await getSettings();
-      applySettings(settings);
-    } catch (error) {
-      console.error('Failed to load settings in background', error);
-    }
-  };
-
-  const applySettings = (settings: ExtensionSettings) => {
-    currentWindowMode = settings.windowMode;
+    chrome.action.setPopup({ popup: '' });
+    configureSidePanel();
   };
 
   initialize();
-
-  chrome.runtime.onInstalled.addListener(() => {
-    initialize();
-  });
-
-  subscribeToSettings((settings) => {
-    applySettings(settings);
-  });
+  chrome.runtime.onInstalled.addListener(initialize);
 
   chrome.action.onClicked.addListener((tab) => {
-    if (currentWindowMode === 'sidepanel' && sidePanelAvailable && chrome.sidePanel?.open) {
-      const windowId = tab?.windowId ?? chrome.windows.WINDOW_ID_CURRENT;
-      chrome.sidePanel.open({ windowId }, () => {
-        const err = chrome.runtime?.lastError;
-        if (err) {
-          console.warn('Failed to open side panel, falling back to popup', err);
-          openPopupWindow();
-        }
-      });
+    if (!sidePanelAvailable || !chrome.sidePanel?.open) {
+      console.warn('Side panel API unavailable; cannot open switcher.');
       return;
     }
 
-    openPopupWindow();
+    const windowId = tab?.windowId ?? chrome.windows.WINDOW_ID_CURRENT;
+    chrome.sidePanel.open({ windowId }, () => {
+      const err = chrome.runtime?.lastError;
+      if (err) {
+        console.error('Failed to open side panel', err);
+      }
+    });
   });
-
-  chrome.windows.onRemoved.addListener((windowId) => {
-    if (popupWindowId !== null && windowId === popupWindowId) {
-      popupWindowId = null;
-    }
-  });
-
-  function openPopupWindow() {
-    if (popupWindowId !== null) {
-      chrome.windows.get(popupWindowId, (existing) => {
-        const err = chrome.runtime?.lastError;
-        if (!err && existing) {
-          chrome.windows.update(popupWindowId!, { focused: true });
-          return;
-        }
-        popupWindowId = null;
-        createPopupWindow();
-      });
-      return;
-    }
-
-    createPopupWindow();
-  }
-
-  function createPopupWindow() {
-    chrome.windows.create(
-      {
-        url: chrome.runtime.getURL('popup/index.html'),
-        type: 'popup',
-        width: 420,
-        height: 560,
-        focused: true,
-      },
-      (created) => {
-        const err = chrome.runtime?.lastError;
-        if (err) {
-          console.error('Failed to open popup window', err);
-          return;
-        }
-        popupWindowId = created?.id ?? null;
-      },
-    );
-  }
 });

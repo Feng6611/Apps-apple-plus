@@ -14,7 +14,7 @@ export interface ExtensionSettings {
 const SETTINGS_KEY = 'appStoreRegionSettings';
 const DEFAULT_OVERLAY_ENABLED = true;
 const DEFAULT_LANGUAGE: LanguageCode = 'en';
-const DEFAULT_WINDOW_MODE: PanelWindowMode = 'popup';
+const DEFAULT_WINDOW_MODE: PanelWindowMode = 'sidepanel';
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
   favorites: [...DEFAULT_FAVORITE_REGIONS],

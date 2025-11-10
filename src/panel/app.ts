@@ -1,12 +1,12 @@
 import './style.css';
-import type { ExtensionSettings, PanelWindowMode } from '@/src/lib/storage';
+import type { ExtensionSettings } from '@/src/lib/storage';
 import { DEFAULT_SETTINGS, getSettings, saveSettings, subscribeToSettings } from '@/src/lib/storage';
 import { buildRegionUrl, extractRegionFromUrl, isAppleAppStoreUrl } from '@/src/lib/url';
 import { getRegionLabel, getRegionOptions, normalizeRegion } from '@/src/lib/regions';
 import type { LanguageCode, MessageKey } from '@/src/lib/i18n';
 import { t } from '@/src/lib/i18n';
 
-export type PanelContext = 'popup' | 'sidepanel';
+export type PanelContext = 'sidepanel';
 
 type StatusState = { key: MessageKey | null; params?: Record<string, string> };
 
@@ -14,11 +14,10 @@ type PanelState = {
   tab: chrome.tabs.Tab | null;
   settings: ExtensionSettings;
   pinnedRegions: Set<string>;
-  dirty: boolean;
-  saving: boolean;
+  favoritesSaving: boolean;
+  overlaySaving: boolean;
   currentRegion: string;
   language: LanguageCode;
-  windowMode: PanelWindowMode;
   searchQuery: string;
   status: {
     switch: StatusState;
@@ -33,13 +32,11 @@ type PanelElements = {
   currentRegionValue: HTMLSpanElement;
   switchStatus: HTMLParagraphElement;
   overlayToggle: HTMLInputElement;
-  saveButton: HTMLButtonElement;
   saveStatus: HTMLParagraphElement;
   languageSelect: HTMLSelectElement;
   searchInput: HTMLInputElement;
   regionsList: HTMLDivElement;
   notice: HTMLParagraphElement;
-  windowModeInputs: HTMLInputElement[];
 };
 
 export default function initPanel(context: PanelContext): void {
@@ -52,15 +49,6 @@ export default function initPanel(context: PanelContext): void {
 
   rootElement.innerHTML = `
     <div class="panel" data-context="${context}">
-      <header class="panel__header">
-        <h1 data-i18n="headerTitle"></h1>
-        <a
-          href="https://apps.apple.com"
-          target="_blank"
-          rel="noreferrer"
-          data-i18n="headerLinkLabel"
-        ></a>
-      </header>
       <p class="panel__notice" id="panel-notice" hidden></p>
       <div class="panel__body">
         <div class="basic-info" data-section="basic">
@@ -80,20 +68,6 @@ export default function initPanel(context: PanelContext): void {
                 <input type="checkbox" id="overlay-toggle" />
                 <span data-i18n="overlayToggleLabel"></span>
               </label>
-              <button id="save-button" type="button" disabled data-i18n="saveButton"></button>
-            </div>
-            <div class="window-mode" id="window-mode">
-              <span class="window-mode__label" data-i18n="windowModeLabel"></span>
-              <div class="window-mode__options">
-                <label class="window-mode__option">
-                  <input type="radio" name="window-mode" value="popup" />
-                  <span data-i18n="windowModePopup"></span>
-                </label>
-                <label class="window-mode__option">
-                  <input type="radio" name="window-mode" value="sidepanel" />
-                  <span data-i18n="windowModeSidepanel"></span>
-                </label>
-              </div>
             </div>
           </div>
           <p class="status" id="save-status"></p>
@@ -113,24 +87,21 @@ export default function initPanel(context: PanelContext): void {
     currentRegionValue: panel.querySelector<HTMLSpanElement>('#current-region-value')!,
     switchStatus: panel.querySelector<HTMLParagraphElement>('#switch-status')!,
     overlayToggle: panel.querySelector<HTMLInputElement>('#overlay-toggle')!,
-    saveButton: panel.querySelector<HTMLButtonElement>('#save-button')!,
     saveStatus: panel.querySelector<HTMLParagraphElement>('#save-status')!,
     languageSelect: panel.querySelector<HTMLSelectElement>('#language-select')!,
     searchInput: panel.querySelector<HTMLInputElement>('#search-input')!,
     regionsList: panel.querySelector<HTMLDivElement>('#regions-list')!,
     notice: panel.querySelector<HTMLParagraphElement>('#panel-notice')!,
-    windowModeInputs: Array.from(panel.querySelectorAll<HTMLInputElement>('input[name="window-mode"]')),
   };
 
   const state: PanelState = {
     tab: null,
     settings: DEFAULT_SETTINGS,
     pinnedRegions: new Set(DEFAULT_SETTINGS.favorites.map(normalizeRegion)),
-    dirty: false,
-    saving: false,
+    favoritesSaving: false,
+    overlaySaving: false,
     currentRegion: 'us',
     language: DEFAULT_SETTINGS.language,
-    windowMode: DEFAULT_SETTINGS.windowMode,
     searchQuery: '',
     status: {
       switch: { key: null },
@@ -142,18 +113,16 @@ export default function initPanel(context: PanelContext): void {
   applyLanguageTexts();
   renderRegionsList();
   updateCurrentRegionLabel();
-  updateSaveButtonState();
-  syncWindowModeSelection();
 
   let unsubscribe: (() => void) | undefined;
+  let pendingFavoritesSnapshot: string[] | null = null;
+  let saveStatusTimeoutId: number | null = null;
 
   getSettings()
     .then((settings) => {
       applySettings(settings);
       unsubscribe = subscribeToSettings((incoming) => {
-        if (!state.dirty) {
-          applySettings(incoming);
-        }
+        applySettings(incoming);
       });
     })
     .catch((error) => {
@@ -182,13 +151,7 @@ export default function initPanel(context: PanelContext): void {
     }
 
     if (target.closest('.pin-button')) {
-      if (state.pinnedRegions.has(code)) {
-        state.pinnedRegions.delete(code);
-      } else {
-        state.pinnedRegions.add(code);
-      }
-      renderRegionsList();
-      updateDirtyState();
+      togglePinnedRegion(code);
       return;
     }
 
@@ -197,15 +160,21 @@ export default function initPanel(context: PanelContext): void {
     }
   });
 
-  elements.overlayToggle.addEventListener('change', () => updateDirtyState());
+  elements.regionsList.addEventListener('change', (event) => {
+    const target = event.target as HTMLInputElement;
+    if (target?.name !== 'region' || !target.checked) {
+      return;
+    }
 
-  elements.windowModeInputs.forEach((input) => {
-    input.addEventListener('change', () => {
-      if (input.checked) {
-        state.windowMode = input.value as PanelWindowMode;
-        updateDirtyState();
-      }
-    });
+    const regionItem = target.closest<HTMLDivElement>('.region-item');
+    const code = regionItem?.dataset.code;
+    if (code) {
+      handleRegionSwitch(code);
+    }
+  });
+
+  elements.overlayToggle.addEventListener('change', () => {
+    persistOverlayPreference(elements.overlayToggle.checked);
   });
 
   elements.languageSelect.addEventListener('change', () => {
@@ -221,7 +190,6 @@ export default function initPanel(context: PanelContext): void {
     renderRegionsList();
     updateCurrentRegionLabel();
     refreshStatuses();
-    updateDirtyState();
 
     saveSettings({ language: selected })
       .then((saved) => {
@@ -230,44 +198,6 @@ export default function initPanel(context: PanelContext): void {
       .catch((error) => {
         console.error('Failed to persist language preference', error);
       });
-  });
-
-  elements.saveButton.addEventListener('click', async () => {
-    if (!state.dirty || state.saving) {
-      return;
-    }
-
-    const favorites = Array.from(state.pinnedRegions.values());
-    if (favorites.length === 0) {
-      setSaveStatus('statusSelectFavorites');
-      return;
-    }
-
-    state.saving = true;
-    updateSaveButtonState();
-    setSaveStatus('statusSaveInProgress');
-
-    try {
-      const next = await saveSettings({
-        favorites,
-        overlayEnabled: elements.overlayToggle.checked,
-        language: state.language,
-        windowMode: state.windowMode,
-      });
-      applySettings(next);
-      setSaveStatus('statusSaveSuccess');
-      setTimeout(() => {
-        if (!state.dirty) {
-          setSaveStatus(null);
-        }
-      }, 1500);
-    } catch (error) {
-      console.error('Failed to save settings', error);
-      setSaveStatus('statusSaveFailed');
-    } finally {
-      state.saving = false;
-      updateSaveButtonState();
-    }
   });
 
   async function handleRegionSwitch(code: string) {
@@ -310,17 +240,18 @@ export default function initPanel(context: PanelContext): void {
     state.settings = settings;
     state.pinnedRegions = new Set(settings.favorites.map(normalizeRegion));
     state.language = settings.language;
-    state.windowMode = settings.windowMode;
+    state.favoritesSaving = false;
+    state.overlaySaving = false;
+    pendingFavoritesSnapshot = null;
 
     elements.overlayToggle.checked = settings.overlayEnabled;
+    elements.overlayToggle.disabled = false;
     state.currentRegion = normalizeRegion(state.currentRegion);
 
     applyLanguageTexts();
     renderRegionsList();
     updateCurrentRegionLabel();
     refreshStatuses();
-    syncWindowModeSelection();
-    updateDirtyState();
     updateSwitchState();
   }
 
@@ -363,10 +294,32 @@ export default function initPanel(context: PanelContext): void {
     elements.panel.classList.toggle('panel--inactive', !enabled);
   }
 
-  function syncWindowModeSelection() {
-    for (const input of elements.windowModeInputs) {
-      input.checked = input.value === state.windowMode;
+  function persistOverlayPreference(enabled: boolean) {
+    if (enabled === state.settings.overlayEnabled) {
+      return;
     }
+    if (state.overlaySaving) {
+      return;
+    }
+    state.overlaySaving = true;
+    elements.overlayToggle.disabled = true;
+    setSaveStatus('statusSaveInProgress');
+
+    saveSettings({ overlayEnabled: enabled })
+      .then((saved) => {
+        state.settings.overlayEnabled = saved.overlayEnabled;
+        setSaveStatus('statusSaveSuccess');
+        scheduleSaveStatusClear();
+      })
+      .catch((error) => {
+        console.error('Failed to update overlay preference', error);
+        elements.overlayToggle.checked = state.settings.overlayEnabled;
+        setSaveStatus('statusSaveFailed');
+      })
+      .finally(() => {
+        state.overlaySaving = false;
+        elements.overlayToggle.disabled = false;
+      });
   }
 
   function setPanelNotice(key: MessageKey | null, params?: Record<string, string>) {
@@ -382,6 +335,26 @@ export default function initPanel(context: PanelContext): void {
 
   function setFavoritesDisabled(disabled: boolean) {
     elements.regionsList.classList.toggle('regions-list--disabled', disabled);
+  }
+
+  function togglePinnedRegion(code: string) {
+    const normalized = normalizeRegion(code);
+    const isPinned = state.pinnedRegions.has(normalized);
+
+    if (isPinned && state.pinnedRegions.size === 1) {
+      setSaveStatus('statusSelectFavorites');
+      scheduleSaveStatusClear(2000, true);
+      return;
+    }
+
+    if (isPinned) {
+      state.pinnedRegions.delete(normalized);
+    } else {
+      state.pinnedRegions.add(normalized);
+    }
+
+    renderRegionsList();
+    queueFavoritesSave();
   }
 
   function renderRegionsList() {
@@ -441,25 +414,43 @@ export default function initPanel(context: PanelContext): void {
     applyLanguageTexts();
   }
 
+  function queueFavoritesSave() {
+    pendingFavoritesSnapshot = Array.from(state.pinnedRegions.values());
+    if (!state.favoritesSaving) {
+      void persistFavoriteRegions();
+    }
+  }
+
+  async function persistFavoriteRegions() {
+    if (!pendingFavoritesSnapshot) {
+      return;
+    }
+
+    state.favoritesSaving = true;
+    const favoritesToSave = pendingFavoritesSnapshot;
+    pendingFavoritesSnapshot = null;
+    setSaveStatus('statusSaveInProgress');
+
+    try {
+      const next = await saveSettings({ favorites: favoritesToSave });
+      state.settings.favorites = next.favorites;
+      setSaveStatus('statusSaveSuccess');
+      scheduleSaveStatusClear();
+    } catch (error) {
+      console.error('Failed to update favorite regions', error);
+      state.pinnedRegions = new Set(state.settings.favorites.map(normalizeRegion));
+      renderRegionsList();
+      setSaveStatus('statusSaveFailed');
+    } finally {
+      state.favoritesSaving = false;
+      if (pendingFavoritesSnapshot) {
+        void persistFavoriteRegions();
+      }
+    }
+  }
+
   function updateCurrentRegionLabel() {
     elements.currentRegionValue.textContent = getRegionLabel(state.currentRegion, state.language);
-  }
-
-  function updateDirtyState() {
-    const overlayChanged = elements.overlayToggle.checked !== state.settings.overlayEnabled;
-    const favoritesChanged = !areSetsEqual(
-      state.pinnedRegions,
-      new Set(state.settings.favorites.map(normalizeRegion)),
-    );
-    const languageChanged = state.language !== state.settings.language;
-    const windowModeChanged = state.windowMode !== state.settings.windowMode;
-
-    state.dirty = overlayChanged || favoritesChanged || languageChanged || windowModeChanged;
-    updateSaveButtonState();
-  }
-
-  function updateSaveButtonState() {
-    elements.saveButton.disabled = !state.dirty || state.saving;
   }
 
   function setSwitchStatus(key: MessageKey | null, params?: Record<string, string>) {
@@ -470,6 +461,18 @@ export default function initPanel(context: PanelContext): void {
   function setSaveStatus(key: MessageKey | null, params?: Record<string, string>) {
     state.status.save = { key, params };
     elements.saveStatus.textContent = key ? t(state.language, key, params) : '';
+  }
+
+  function scheduleSaveStatusClear(delay = 1500, clearRegardless = false) {
+    if (saveStatusTimeoutId) {
+      window.clearTimeout(saveStatusTimeoutId);
+    }
+    saveStatusTimeoutId = window.setTimeout(() => {
+      saveStatusTimeoutId = null;
+      if (clearRegardless || state.status.save.key === 'statusSaveSuccess') {
+        setSaveStatus(null);
+      }
+    }, delay);
   }
 
   function refreshStatuses() {
@@ -501,14 +504,6 @@ export default function initPanel(context: PanelContext): void {
     elements.languageSelect.value = state.language;
     elements.searchInput.placeholder = t(state.language, 'searchPlaceholder');
   }
-}
-
-function areSetsEqual(a: Set<string>, b: Set<string>): boolean {
-  if (a.size !== b.size) return false;
-  for (const item of a) {
-    if (!b.has(item)) return false;
-  }
-  return true;
 }
 
 function queryActiveTab(): Promise<chrome.tabs.Tab | null> {
