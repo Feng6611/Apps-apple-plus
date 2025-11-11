@@ -16,7 +16,6 @@ export default defineBackground(() => {
         console.warn('Failed to configure side panel', err);
       }
     });
-    chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true });
   };
 
   const initialize = async () => {
@@ -26,25 +25,9 @@ export default defineBackground(() => {
       console.error('Failed to initialize default settings', error);
     }
 
-    chrome.action.setPopup({ popup: '' });
     configureSidePanel();
   };
 
   initialize();
   chrome.runtime.onInstalled.addListener(initialize);
-
-  chrome.action.onClicked.addListener((tab) => {
-    if (!sidePanelAvailable || !chrome.sidePanel?.open) {
-      console.warn('Side panel API unavailable; cannot open switcher.');
-      return;
-    }
-
-    const windowId = tab?.windowId ?? chrome.windows.WINDOW_ID_CURRENT;
-    chrome.sidePanel.open({ windowId }, () => {
-      const err = chrome.runtime?.lastError;
-      if (err) {
-        console.error('Failed to open side panel', err);
-      }
-    });
-  });
 });

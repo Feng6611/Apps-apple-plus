@@ -6,7 +6,10 @@ import { getRegionLabel, getRegionOptions, normalizeRegion } from '@/src/lib/reg
 import type { LanguageCode, MessageKey } from '@/src/lib/i18n';
 import { t } from '@/src/lib/i18n';
 
-export type PanelContext = 'sidepanel';
+const APP_STORE_DOMAIN = 'apps.apple.com';
+const APP_STORE_URL = `https://${APP_STORE_DOMAIN}`;
+
+export type PanelContext = 'sidepanel' | 'window' | 'popup';
 
 type StatusState = { key: MessageKey | null; params?: Record<string, string> };
 
@@ -15,7 +18,6 @@ type PanelState = {
   settings: ExtensionSettings;
   pinnedRegions: Set<string>;
   favoritesSaving: boolean;
-  overlaySaving: boolean;
   currentRegion: string;
   language: LanguageCode;
   searchQuery: string;
@@ -29,10 +31,8 @@ type PanelState = {
 type PanelElements = {
   root: HTMLDivElement;
   panel: HTMLDivElement;
+  openSidePanelButton: HTMLButtonElement | null;
   currentRegionValue: HTMLSpanElement;
-  switchStatus: HTMLParagraphElement;
-  overlayToggle: HTMLInputElement;
-  saveStatus: HTMLParagraphElement;
   languageSelect: HTMLSelectElement;
   searchInput: HTMLInputElement;
   regionsList: HTMLDivElement;
@@ -49,6 +49,12 @@ export default function initPanel(context: PanelContext): void {
 
   rootElement.innerHTML = `
     <div class="panel" data-context="${context}">
+      <div class="panel__header">
+        <span class="panel__title" data-i18n="headerTitle"></span>
+        <button type="button" class="panel__open-sidepanel" id="open-sidepanel">
+          <span data-i18n="openSidePanelButton"></span>
+        </button>
+      </div>
       <p class="panel__notice" id="panel-notice" hidden></p>
       <div class="panel__body">
         <div class="basic-info" data-section="basic">
@@ -61,33 +67,22 @@ export default function initPanel(context: PanelContext): void {
         <div class="regions-section" data-section="regions">
           <input type="search" id="search-input" class="search-input" />
           <div class="regions-list" id="regions-list"></div>
-          <p class="status" id="switch-status"></p>
-          <div class="settings-group">
-            <div class="settings-row">
-              <label class="toggle">
-                <input type="checkbox" id="overlay-toggle" />
-                <span data-i18n="overlayToggleLabel"></span>
-              </label>
-            </div>
-          </div>
-          <p class="status" id="save-status"></p>
         </div>
       </div>
     </div>
   `;
 
-  const panel = rootElement.querySelector<HTMLDivElement>('.panel');
-  if (!panel) {
+  const panelElement = rootElement.querySelector<HTMLDivElement>('.panel');
+  if (!(panelElement instanceof HTMLDivElement)) {
     throw new Error('Panel root missing');
   }
+  const panel = panelElement;
 
   const elements: PanelElements = {
     root: rootElement,
     panel,
+    openSidePanelButton: panel.querySelector<HTMLButtonElement>('#open-sidepanel'),
     currentRegionValue: panel.querySelector<HTMLSpanElement>('#current-region-value')!,
-    switchStatus: panel.querySelector<HTMLParagraphElement>('#switch-status')!,
-    overlayToggle: panel.querySelector<HTMLInputElement>('#overlay-toggle')!,
-    saveStatus: panel.querySelector<HTMLParagraphElement>('#save-status')!,
     languageSelect: panel.querySelector<HTMLSelectElement>('#language-select')!,
     searchInput: panel.querySelector<HTMLInputElement>('#search-input')!,
     regionsList: panel.querySelector<HTMLDivElement>('#regions-list')!,
@@ -99,7 +94,6 @@ export default function initPanel(context: PanelContext): void {
     settings: DEFAULT_SETTINGS,
     pinnedRegions: new Set(DEFAULT_SETTINGS.favorites.map(normalizeRegion)),
     favoritesSaving: false,
-    overlaySaving: false,
     currentRegion: 'us',
     language: DEFAULT_SETTINGS.language,
     searchQuery: '',
@@ -116,7 +110,6 @@ export default function initPanel(context: PanelContext): void {
 
   let unsubscribe: (() => void) | undefined;
   let pendingFavoritesSnapshot: string[] | null = null;
-  let saveStatusTimeoutId: number | null = null;
 
   getSettings()
     .then((settings) => {
@@ -173,9 +166,15 @@ export default function initPanel(context: PanelContext): void {
     }
   });
 
-  elements.overlayToggle.addEventListener('change', () => {
-    persistOverlayPreference(elements.overlayToggle.checked);
-  });
+  if (elements.openSidePanelButton) {
+    elements.openSidePanelButton.hidden = context !== 'popup';
+    elements.openSidePanelButton.addEventListener('click', () => {
+      if (elements.openSidePanelButton?.disabled) {
+        return;
+      }
+      openSidePanel();
+    });
+  }
 
   elements.languageSelect.addEventListener('change', () => {
     const selected = (elements.languageSelect.value as LanguageCode) || 'en';
@@ -219,7 +218,7 @@ export default function initPanel(context: PanelContext): void {
 
     try {
       setSwitchStatus('statusSwitching', { region: getRegionLabel(code, state.language) });
-      const finalUrl = await requestRegionSwitch(state.tab.id, code, nextUrl);
+      const finalUrl = await requestRegionSwitch(state.tab.id, nextUrl);
       if (state.tab) {
         state.tab.url = finalUrl;
       }
@@ -241,11 +240,8 @@ export default function initPanel(context: PanelContext): void {
     state.pinnedRegions = new Set(settings.favorites.map(normalizeRegion));
     state.language = settings.language;
     state.favoritesSaving = false;
-    state.overlaySaving = false;
     pendingFavoritesSnapshot = null;
 
-    elements.overlayToggle.checked = settings.overlayEnabled;
-    elements.overlayToggle.disabled = false;
     state.currentRegion = normalizeRegion(state.currentRegion);
 
     applyLanguageTexts();
@@ -262,7 +258,7 @@ export default function initPanel(context: PanelContext): void {
     } catch (error) {
       console.error('Failed to read active tab', error);
       setSwitchStatus('statusCantLoadTab');
-      setPanelNotice('inactiveMessage', { domain: 'apps.apple.com' });
+      setPanelNotice('inactiveMessage', { domain: APP_STORE_DOMAIN });
       setPanelAvailability(false);
     }
   }
@@ -275,7 +271,7 @@ export default function initPanel(context: PanelContext): void {
       updateCurrentRegionLabel();
       setFavoritesDisabled(true);
       setSwitchStatus(null);
-      setPanelNotice('inactiveMessage', { domain: 'apps.apple.com' });
+      setPanelNotice('inactiveMessage', { domain: APP_STORE_DOMAIN });
       setPanelAvailability(false);
       return;
     }
@@ -294,43 +290,57 @@ export default function initPanel(context: PanelContext): void {
     elements.panel.classList.toggle('panel--inactive', !enabled);
   }
 
-  function persistOverlayPreference(enabled: boolean) {
-    if (enabled === state.settings.overlayEnabled) {
+  function openSidePanel() {
+    if (!chrome.sidePanel?.open) {
+      console.warn('Side panel API unavailable; cannot open switcher.');
       return;
     }
-    if (state.overlaySaving) {
-      return;
-    }
-    state.overlaySaving = true;
-    elements.overlayToggle.disabled = true;
-    setSaveStatus('statusSaveInProgress');
-
-    saveSettings({ overlayEnabled: enabled })
-      .then((saved) => {
-        state.settings.overlayEnabled = saved.overlayEnabled;
-        setSaveStatus('statusSaveSuccess');
-        scheduleSaveStatusClear();
-      })
-      .catch((error) => {
-        console.error('Failed to update overlay preference', error);
-        elements.overlayToggle.checked = state.settings.overlayEnabled;
-        setSaveStatus('statusSaveFailed');
-      })
-      .finally(() => {
-        state.overlaySaving = false;
-        elements.overlayToggle.disabled = false;
-      });
+    const windowId = state.tab?.windowId ?? chrome.windows.WINDOW_ID_CURRENT;
+    chrome.sidePanel.open({ windowId }, () => {
+      const err = chrome.runtime?.lastError;
+      if (err) {
+        console.error('Failed to open side panel', err);
+      }
+    });
   }
 
   function setPanelNotice(key: MessageKey | null, params?: Record<string, string>) {
     state.status.notice = { key, params };
+    renderNotice(key, params);
+  }
+
+  function renderNotice(key: MessageKey | null, params?: Record<string, string>) {
     if (!key) {
       elements.notice.hidden = true;
       elements.notice.textContent = '';
       return;
     }
     elements.notice.hidden = false;
-    elements.notice.textContent = t(state.language, key, params);
+    const message = t(state.language, key, params);
+    elements.notice.textContent = '';
+    const domain = params?.domain;
+    if (key === 'inactiveMessage' && domain) {
+      const domainIndex = message.indexOf(domain);
+      if (domainIndex !== -1) {
+        const before = message.slice(0, domainIndex);
+        const after = message.slice(domainIndex + domain.length);
+        if (before) {
+          elements.notice.append(document.createTextNode(before));
+        }
+        const link = document.createElement('a');
+        link.href = domain.startsWith('http') ? domain : `https://${domain}`;
+        link.target = '_blank';
+        link.rel = 'noreferrer noopener';
+        link.textContent = domain;
+        link.className = 'panel__notice-link';
+        elements.notice.append(link);
+        if (after) {
+          elements.notice.append(document.createTextNode(after));
+        }
+        return;
+      }
+    }
+    elements.notice.textContent = message;
   }
 
   function setFavoritesDisabled(disabled: boolean) {
@@ -364,8 +374,8 @@ export default function initPanel(context: PanelContext): void {
     const filteredOptions =
       query.length > 0
         ? allOptions.filter(
-            (opt) => opt.label.toLowerCase().includes(query) || opt.code.toLowerCase().includes(query),
-          )
+          (opt) => opt.label.toLowerCase().includes(query) || opt.code.toLowerCase().includes(query),
+        )
         : allOptions;
 
     const pinned: typeof allOptions = [];
@@ -398,17 +408,18 @@ export default function initPanel(context: PanelContext): void {
       `;
     };
 
-    const buildListHtml = (list: typeof allOptions, titleKey: MessageKey | null) => {
+    const buildListHtml = (list: typeof allOptions, titleKey: MessageKey | null, context: PanelContext) => {
       if (list.length === 0) {
         return '';
       }
-      const title = titleKey ? `<h3 class=\"regions-list__title\" data-i18n=\"${titleKey}\"></h3>` : '';
+      const showTitle = titleKey && context !== 'sidepanel';
+      const title = showTitle ? `<h3 class=\"regions-list__title\" data-i18n=\"${titleKey}\"></h3>` : '';
       const items = list.map((item) => renderItem(item.code, item.label)).join('');
       return `${title}<div class="regions-group">${items}</div>`;
     };
 
-    const pinnedHtml = buildListHtml(pinned, 'pinnedLabel');
-    const othersHtml = buildListHtml(others, 'allRegionsLabel');
+    const pinnedHtml = buildListHtml(pinned, 'pinnedLabel', context);
+    const othersHtml = buildListHtml(others, 'allRegionsLabel', context);
 
     elements.regionsList.innerHTML = pinnedHtml + othersHtml;
     applyLanguageTexts();
@@ -455,41 +466,21 @@ export default function initPanel(context: PanelContext): void {
 
   function setSwitchStatus(key: MessageKey | null, params?: Record<string, string>) {
     state.status.switch = { key, params };
-    elements.switchStatus.textContent = key ? t(state.language, key, params) : '';
+    // Status messages removed from UI
   }
 
   function setSaveStatus(key: MessageKey | null, params?: Record<string, string>) {
     state.status.save = { key, params };
-    elements.saveStatus.textContent = key ? t(state.language, key, params) : '';
+    // Status messages removed from UI
   }
 
   function scheduleSaveStatusClear(delay = 1500, clearRegardless = false) {
-    if (saveStatusTimeoutId) {
-      window.clearTimeout(saveStatusTimeoutId);
-    }
-    saveStatusTimeoutId = window.setTimeout(() => {
-      saveStatusTimeoutId = null;
-      if (clearRegardless || state.status.save.key === 'statusSaveSuccess') {
-        setSaveStatus(null);
-      }
-    }, delay);
+    // Status messages removed from UI
   }
 
   function refreshStatuses() {
-    const { switch: switchStatus, save: saveStatus, notice } = state.status;
-    elements.switchStatus.textContent = switchStatus.key
-      ? t(state.language, switchStatus.key, switchStatus.params)
-      : '';
-    elements.saveStatus.textContent = saveStatus.key
-      ? t(state.language, saveStatus.key, saveStatus.params)
-      : '';
-    if (notice.key) {
-      elements.notice.hidden = false;
-      elements.notice.textContent = t(state.language, notice.key, notice.params);
-    } else {
-      elements.notice.hidden = true;
-      elements.notice.textContent = '';
-    }
+    const { notice } = state.status;
+    renderNotice(notice.key, notice.params);
   }
 
   function applyLanguageTexts() {
@@ -503,6 +494,25 @@ export default function initPanel(context: PanelContext): void {
     });
     elements.languageSelect.value = state.language;
     elements.searchInput.placeholder = t(state.language, 'searchPlaceholder');
+    updateSidePanelButtonState();
+  }
+
+  function updateSidePanelButtonState() {
+    const button = elements.openSidePanelButton;
+    if (!button) {
+      return;
+    }
+    if (context !== 'popup') {
+      button.hidden = true;
+      return;
+    }
+    button.hidden = false;
+    const supported = Boolean(chrome.sidePanel?.open);
+    button.disabled = !supported;
+    const titleKey: MessageKey = supported ? 'openSidePanelButton' : 'openSidePanelUnavailable';
+    const label = t(state.language, titleKey);
+    button.title = label;
+    button.setAttribute('aria-label', label);
   }
 }
 
@@ -519,24 +529,15 @@ function queryActiveTab(): Promise<chrome.tabs.Tab | null> {
   });
 }
 
-function requestRegionSwitch(tabId: number, region: string, fallbackUrl: string): Promise<string> {
+function requestRegionSwitch(tabId: number, targetUrl: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    chrome.tabs.sendMessage(tabId, { type: 'switch-region', region }, (response) => {
-      const messageError = chrome.runtime?.lastError;
-      if (messageError || !response?.success) {
-        chrome.tabs.update(tabId, { url: fallbackUrl }, () => {
-          const updateError = chrome.runtime?.lastError;
-          if (updateError) {
-            reject(updateError);
-          } else {
-            resolve(fallbackUrl);
-          }
-        });
+    chrome.tabs.update(tabId, { url: targetUrl }, () => {
+      const updateError = chrome.runtime?.lastError;
+      if (updateError) {
+        reject(updateError);
         return;
       }
-
-      const url = typeof response.url === 'string' ? response.url : fallbackUrl;
-      resolve(url);
+      resolve(targetUrl);
     });
   });
 }

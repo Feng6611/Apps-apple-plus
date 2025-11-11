@@ -2,25 +2,17 @@ import type { RegionCode } from './regions';
 import { DEFAULT_FAVORITE_REGIONS, filterValidRegions } from './regions';
 import type { LanguageCode } from './i18n';
 
-export type PanelWindowMode = 'popup' | 'sidepanel';
-
 export interface ExtensionSettings {
   favorites: RegionCode[];
-  overlayEnabled: boolean;
   language: LanguageCode;
-  windowMode: PanelWindowMode;
 }
 
 const SETTINGS_KEY = 'appStoreRegionSettings';
-const DEFAULT_OVERLAY_ENABLED = true;
 const DEFAULT_LANGUAGE: LanguageCode = 'en';
-const DEFAULT_WINDOW_MODE: PanelWindowMode = 'sidepanel';
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
   favorites: [...DEFAULT_FAVORITE_REGIONS],
-  overlayEnabled: DEFAULT_OVERLAY_ENABLED,
   language: DEFAULT_LANGUAGE,
-  windowMode: DEFAULT_WINDOW_MODE,
 };
 
 function getStorageArea(): chrome.storage.LocalStorageArea {
@@ -62,9 +54,7 @@ function mergeSettings(partial?: Partial<ExtensionSettings>): ExtensionSettings 
   const favoritesCandidate = filterValidRegions(partial?.favorites ?? DEFAULT_FAVORITE_REGIONS);
   return {
     favorites: favoritesCandidate.length > 0 ? favoritesCandidate : [...DEFAULT_FAVORITE_REGIONS],
-    overlayEnabled: partial?.overlayEnabled ?? DEFAULT_OVERLAY_ENABLED,
     language: (partial?.language ?? DEFAULT_LANGUAGE) as LanguageCode,
-    windowMode: (partial?.windowMode ?? DEFAULT_WINDOW_MODE) as PanelWindowMode,
   };
 }
 

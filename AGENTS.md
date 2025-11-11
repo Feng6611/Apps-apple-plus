@@ -34,3 +34,10 @@
 ## Security & Configuration Tips
 - Never commit API keys or Apple credentials; store secrets in `.env.local` (excluded via `.gitignore`).
 - When testing region switching, use staging Apple IDs and reset stored regions via the popup settings before sharing builds.
+
+## MCP Tooling (Chrome Dev)
+- When configured, the `chrome-dev` MCP server lets us capture Chrome DevTools data (DOM snapshots, console logs, network events) from a running extension session without screen-sharing.
+- Before debugging injection issues, run `list_mcp_resources` with `server: "chrome-dev"` to confirm the connection and discover which resources (e.g., DOM, console) are currently exposed.
+- Use `read_mcp_resource` against `chrome-dev` to pull console logs and verify the `[asrs]` messages emitted by the content script; missing logs usually means the script never executed.
+- When DOM-related regressions occur, request a DOM snapshot via the same server and search for `#appstore-region-switcher-embed` or the platform selector container to confirm whether the embed was inserted.
+- Capture the MCP output in bug reports/PRs whenever possible so other contributors can reproduce or compare App Store markup changes.
