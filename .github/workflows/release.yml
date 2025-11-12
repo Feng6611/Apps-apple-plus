@@ -49,28 +49,40 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Bump version and tag
+      - name: Resolve version
         id: version
         env:
           RELEASE_TYPE: ${{ inputs.release_type }}
           CUSTOM_VERSION: ${{ inputs.custom_version }}
         run: |
-          if [[ "$RELEASE_TYPE" == "custom" ]]; then
-            if [[ -z "$CUSTOM_VERSION" ]]; then
-              echo "custom_version is required when release_type=custom" >&2
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            VERSION="${TAG#v}"
+            if [[ -z "$VERSION" ]]; then
+              echo "Unable to parse version from ref: $GITHUB_REF" >&2
               exit 1
             fi
-            npm version "$CUSTOM_VERSION" -m "chore: release %s"
+            echo "Detected pushed tag: v$VERSION"
           else
-            npm version "$RELEASE_TYPE" -m "chore: release %s"
+            TYPE="${RELEASE_TYPE:-patch}"
+            if [[ "$TYPE" == "custom" ]]; then
+              if [[ -z "$CUSTOM_VERSION" ]]; then
+                echo "custom_version is required when release_type=custom" >&2
+                exit 1
+              fi
+              npm version "$CUSTOM_VERSION" -m "chore: release %s"
+            else
+              npm version "$TYPE" -m "chore: release %s"
+            fi
+            VERSION=$(node -p "require('./package.json').version")
+            CURRENT_BRANCH=$(git branch --show-current)
+            echo "CURRENT_BRANCH=$CURRENT_BRANCH" >> "$GITHUB_ENV"
           fi
-          VERSION=$(node -p "require('./package.json').version")
-          CURRENT_BRANCH=$(git branch --show-current)
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "CURRENT_BRANCH=$CURRENT_BRANCH" >> "$GITHUB_ENV"
 
       - name: Push release commit and tag
+        if: github.event_name == 'workflow_dispatch'
         run: |
           git push origin "$CURRENT_BRANCH"
           git push origin "v$VERSION"
