@@ -1,7 +1,7 @@
 {
   "name": "app-store-plus",
   "description": "App Store Plus - Chrome extension for quickly switching regions on apps.apple.com.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "scripts": {
