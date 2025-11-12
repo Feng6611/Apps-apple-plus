@@ -57,12 +57,17 @@ jobs:
         run: |
           if [[ "${{ github.event_name }}" == "push" ]]; then
             TAG="${GITHUB_REF#refs/tags/}"
+            if [[ "$TAG" != v* ]]; then
+              echo "Release tags must start with 'v': $TAG" >&2
+              exit 1
+            fi
             VERSION="${TAG#v}"
             if [[ -z "$VERSION" ]]; then
               echo "Unable to parse version from ref: $GITHUB_REF" >&2
               exit 1
             fi
-            echo "Detected pushed tag: v$VERSION"
+            echo "Detected pushed tag: $TAG"
+            echo "TAG_NAME=$TAG" >> "$GITHUB_ENV"
           else
             TYPE="${RELEASE_TYPE:-patch}"
             if [[ "$TYPE" == "custom" ]]; then
@@ -77,6 +82,7 @@ jobs:
             VERSION=$(node -p "require('./package.json').version")
             CURRENT_BRANCH=$(git branch --show-current)
             echo "CURRENT_BRANCH=$CURRENT_BRANCH" >> "$GITHUB_ENV"
+            echo "TAG_NAME=v$VERSION" >> "$GITHUB_ENV"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
@@ -85,7 +91,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         run: |
           git push origin "$CURRENT_BRANCH"
-          git push origin "v$VERSION"
+          git push origin "$TAG_NAME"
 
       - name: Build distributables
         run: npm run zip:all
@@ -102,11 +108,11 @@ jobs:
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: App Store Plus v${{ steps.version.outputs.version }}
+          tag_name: ${{ env.TAG_NAME }}
+          name: App Store Plus ${{ env.TAG_NAME }}
           body: |
             Automated release generated via workflow dispatch.
-            - Version: v${{ steps.version.outputs.version }}
+            - Version: ${{ env.TAG_NAME }}
             - Triggered by: ${{ github.actor }}
           files: |
             .output/app-store-plus-${{ steps.version.outputs.version }}-chrome.zip
