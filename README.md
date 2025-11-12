@@ -2,9 +2,9 @@
 
 [English](./README.md) | [中文](./README_zh.md)
 
-A browser extension that allows you to quickly switch regions while browsing the [App Store web version](https://apps.apple.com).
+A browser extension that allows you to quickly switch regions while browsing the [apps.apple.com](https://apps.apple.com).
 
-![Popup Screenshot](./public/readme-popup.png)
+<img src="./public/readme-popup.png" alt="Popup Screenshot" width="300">
 
 ## Get Started
 

@@ -2,9 +2,9 @@
 
 [English](./README.md) | [中文](./README_zh.md)
 
-一个浏览器扩展，让你在浏览 [App Store 网页版](https://apps.apple.com) 时快速切换区域。
+一个浏览器扩展，让你在浏览 [apps.apple.com](https://apps.apple.com) 时快速切换区域。
 
-![Popup Screenshot](./public/readme-popup.png)
+<img src="./public/readme-popup.png" alt="Popup Screenshot" width="300">
 
 ## Get Started
 
