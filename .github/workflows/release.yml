@@ -1,0 +1,99 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: Choose a semantic version bump
+        required: true
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+          - custom
+      custom_version:
+        description: Custom semver (required when release_type=custom)
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      NODE_VERSION: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Configure git author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump version and tag
+        id: version
+        env:
+          RELEASE_TYPE: ${{ inputs.release_type }}
+          CUSTOM_VERSION: ${{ inputs.custom_version }}
+        run: |
+          if [[ "$RELEASE_TYPE" == "custom" ]]; then
+            if [[ -z "$CUSTOM_VERSION" ]]; then
+              echo "custom_version is required when release_type=custom" >&2
+              exit 1
+            fi
+            npm version "$CUSTOM_VERSION" -m "chore: release %s"
+          else
+            npm version "$RELEASE_TYPE" -m "chore: release %s"
+          fi
+          VERSION=$(node -p "require('./package.json').version")
+          CURRENT_BRANCH=$(git branch --show-current)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "CURRENT_BRANCH=$CURRENT_BRANCH" >> "$GITHUB_ENV"
+
+      - name: Push release commit and tag
+        run: |
+          git push origin "$CURRENT_BRANCH"
+          git push origin "v$VERSION"
+
+      - name: Build distributables
+        run: npm run zip:all
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-zips-${{ steps.version.outputs.version }}
+          path: |
+            .output/app-store-plus-${{ steps.version.outputs.version }}-chrome.zip
+            .output/app-store-plus-${{ steps.version.outputs.version }}-firefox.zip
+            .output/app-store-plus-${{ steps.version.outputs.version }}-safari.zip
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: App Store Plus v${{ steps.version.outputs.version }}
+          body: |
+            Automated release generated via workflow dispatch.
+            - Version: v${{ steps.version.outputs.version }}
+            - Triggered by: ${{ github.actor }}
+          files: |
+            .output/app-store-plus-${{ steps.version.outputs.version }}-chrome.zip
+            .output/app-store-plus-${{ steps.version.outputs.version }}-firefox.zip
+            .output/app-store-plus-${{ steps.version.outputs.version }}-safari.zip

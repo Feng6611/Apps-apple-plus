@@ -1,4 +1,8 @@
+import { createRequire } from 'node:module';
 import { defineConfig } from 'wxt';
+
+const require = createRequire(import.meta.url);
+const { version } = require('./package.json');
 
 export default defineConfig({
   hooks: {
@@ -20,7 +24,7 @@ export default defineConfig({
     const baseManifest: any = {
       name: 'App Store Plus',
       description: 'Quickly switch App Store regions from the popup or side panel.',
-      version: '0.1.0',
+      version,
       permissions: ['storage', 'tabs', 'windows'],
       action: {
         default_title: 'App Store 区域切换',
