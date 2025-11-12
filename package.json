@@ -1,16 +1,21 @@
 {
-  "name": "app-store-region-switcher",
-  "description": "Chrome extension for quickly switching regions on apps.apple.com.",
+  "name": "app-store-plus",
+  "description": "App Store Plus - Chrome extension for quickly switching regions on apps.apple.com.",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "wxt",
     "dev:firefox": "wxt -b firefox",
+    "dev:safari": "wxt -b safari",
     "build": "wxt build",
     "build:firefox": "wxt build -b firefox",
+    "build:safari": "wxt build -b safari",
+    "build:all": "npm run build && npm run build:firefox && npm run build:safari",
     "zip": "wxt zip",
     "zip:firefox": "wxt zip -b firefox",
+    "zip:safari": "wxt zip -b safari",
+    "zip:all": "npm run zip && npm run zip:firefox && npm run zip:safari",
     "prepare": "wxt prepare",
     "postinstall": "wxt prepare"
   },
